@@ -1,0 +1,464 @@
+---
+title: "Power Analysis"
+author: "Daniel Collins, Greg Rosen, Martin Lim, Javier Rondon"
+date: "10/04/2022"
+output: pdf_document
+name: "Daniel Collins, Greg Rosen, Martin Lim, Javier Rondon"
+
+---
+```{r global options, include = FALSE}
+knitr::opts_chunk$set(include = FALSE, message = FALSE, warning = FALSE )
+
+knitr::knit_engines$set(problem_description = function(options) {
+  code <- paste(options$code, collapse = "\n")
+})
+```
+
+# Power Analysis 
+
+```{r declare_constants_and_libraries, include = FALSE, warning = FALSE}
+
+# install.packages('lmtest')
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(lmtest)
+library(sandwich)
+
+# Significance threshold
+ALPHA = 0.05
+ 
+# Profile_Viewer_Attract
+# Figures based on "The Democracy of Dating"
+ATTRACT_CONTROL = 89
+ATTRACT_LIBERAL = 83
+ATTRACT_CONSERVATIVE = 72
+
+# Returns percent difference (as a decimal) compared to the old
+get_pct_diff <- function(old, new) {
+  return((new-old)/old)
+}
+
+# Treatment multipliers based on percentage less likely to swipe
+TRT_LIB = get_pct_diff(ATTRACT_CONTROL, ATTRACT_LIBERAL)
+TRT_CON = get_pct_diff(ATTRACT_CONTROL, ATTRACT_CONSERVATIVE)
+# Base treatment modifier
+TRT_LIB_SD_PCT = 0.01
+TRT_CON_SD_PCT = 0.01
+
+GENDER_MALE_FEMALE_RATIO <- 3
+GENDER_MALE_SD_PCT <- 0 # 0.1
+GENDER_FEMALE_SD_PCT <- 0 # 0.1
+
+# https://www.businessofapps.com/data/dating-app-market/
+PLATFORM_TINDER_MARKETSHARE <- 32
+PLATFORM_HINGE_MARKETSHARE <- 15
+PLATFORM_POF_MARKETSHARE <- 14
+
+PLATFORM_TINDER_SD_PCT <- 0 # 0.1
+PLATFORM_HINGE_SD_PCT <- 0 # 0.1
+PLATFORM_POF_SD_PCT <- 0 # 0.1
+
+# Scenario 3 constants
+PCT_FEMALE_SWIPE_MATCH <- 0.19
+PCT_MALE_SWIPE_MATCH <-0.055
+
+```
+
+The research question investigated in this study is: "Does declaring a political leaning in a dating application profile affect the profile's match rate?". To answer this question, this study will attempt to create dating profiles of different genders in different dating application platforms with biography descriptions containing one of three treatment variants: No political leaning (Control), Liberal leaning (Treatment 1), or Conservative leaning (Treatment 2).</br> 
+
+The profiles will be exposed with no treatment added to the user network of the dating application platform. All profiles will attempt to match with the first designated number of profiles shown to them, then number of matches within the first testing period will be measured. After a break period, the treatment will be administered to the two treatment groups and the profiles will attempt to be match with the next fixed number of profiles shown to them. The number of matches will be recorded and measured for the treatment effect. </br>  
+
+To measure the treatment effect, three scenarios were simulated in this Power Analysis report:
+1. The nominal number of matches a profile receives after the treatment will be measured and compared between experimental groups for any treatment effect (`num_matches`)
+2. The number of post-treatment matches as a percentage of the pre-treatment matches (`post-treatment matches` / `pre-treatment matches`) will be measured and compared between experimental groups (`rel_match_rate`)
+3. The number of matches per number of swipes on the profile will be measured between experimental groups (`matched`)
+
+To simulate the first two scenarios, a data table was created to simulate the population and simulate the treatment effects on different profiles where each row represents an experimental dating profile created and exposed to the dating profile network with or without a treatment. The following considerations were made:
+
+* 75% of the profiles generated were male and 25% were female according to studies
+* The nominal number of matches per profile between three dating platforms (Tinder, Hinge, Plenty of Fish) were scaled by market share as studied by [Businessofapps.com](https://www.businessofapps.com/data/dating-app-market/)
+* The estimated population treatment effects were derived from findings from [The Democracy of Dating: A Survey Experiment on American Dating Preferences](https://scholarsarchive.byu.edu/cgi/viewcontent.cgi?article=1236&context=sigma) by Matthew Easton where the overall attractiveness of Liberal profiles was 6.74% less than that of control and the overall attractiveness of Conservative profiles was 19.1% less than that of control. These percentage drops were incorporated in the treatment effect.
+* The treatment effects and figures were randomized using normal distributions
+
+```{r create_table_for_scenario_1_and_2, warning = FALSE}
+# Use 30k rows as the population
+d <- data.table(id = 1:30000)
+
+# assign participants a gender and app platform
+d[, gender := sample(c('male', 'female'), size = .N, replace = TRUE)]
+d[, platform := sample(c('tinder', 'hinge', 'pof'), size = .N, replace = TRUE)]
+
+# simulates variation due to different profile pictures
+d[, quality_multiplier := pmax(rnorm(.N,1.5,0.25),0.01)]
+
+# studies show dating apps are ~75% male
+d[gender == 'male',     gender_multiplier := pmax(rnorm(.N,1,1*GENDER_MALE_SD_PCT),0.01)]
+d[gender == 'female',     gender_multiplier := pmax(rnorm(.N,GENDER_MALE_FEMALE_RATIO,GENDER_MALE_FEMALE_RATIO*GENDER_FEMALE_SD_PCT),0.01)]
+
+d[platform == 'tinder',     audience_multiplier := pmax(rnorm(.N,PLATFORM_TINDER_MARKETSHARE,PLATFORM_TINDER_MARKETSHARE*PLATFORM_TINDER_SD_PCT),0.01)]
+d[platform == 'hinge',     audience_multiplier := pmax(rnorm(.N,PLATFORM_HINGE_MARKETSHARE,PLATFORM_HINGE_MARKETSHARE*PLATFORM_HINGE_SD_PCT),0.01)]
+d[platform == 'pof',     audience_multiplier := pmax(rnorm(.N,PLATFORM_POF_MARKETSHARE,PLATFORM_POF_MARKETSHARE*PLATFORM_POF_SD_PCT),0.01)]
+
+# simulates pool of number of matches before treatment
+d[,base_matches := round(quality_multiplier * gender_multiplier * audience_multiplier)]
+
+# different treatments to be assigned
+d[, treatment := sample(c('anone', 'liberal', 'conservative'), size = .N, replace = TRUE)]
+
+# Treatment-induced decay figures based on "The Democracy of Dating"
+d[treatment == 'anone',     treatment_multiplier := 0]
+# propose liberal treatment causes 15% fewer matches on average
+d[treatment == 'liberal',     treatment_multiplier := pmax(rnorm(.N,TRT_LIB,abs(TRT_LIB)*TRT_LIB_SD_PCT),-0.99)]
+# propose conservative treatment causes 30% fewer matches on average
+d[treatment == 'conservative',     treatment_multiplier := pmax(rnorm(.N,TRT_CON,abs(TRT_CON)*TRT_CON_SD_PCT),-0.99)]
+
+# simulate natural decay in number of matches relative to when account is first created
+d[, time_decay_multiplier := pmax(rnorm(.N,0.75,0.05),0.01)]
+
+# simulates pool of number of matches after treatment (or control)
+d[,num_matches := round(base_matches * time_decay_multiplier * (1 + treatment_multiplier))]
+# measure the number of matches after treatment relative to number of matches during the pre-treatment control
+d[,rel_match_rate := num_matches/base_matches]
+
+```
+
+
+``` {r random_inference_functions, warning = FALSE}
+# Samples from the population table and secures equal number of
+# profiles for control and both treatments (must be in multiples of 3)
+get_sample <- function(d, s_size = 18) {
+  return(d[, .SD[sample(x = .N, size = s_size/3,replace=TRUE)], by = treatment])
+  # return(d[, .SD[sample(x = .N, size = s_size/18,replace=TRUE)], by = .(treatment,gender,platform)])
+}
+
+experiment_lm <- function(d_sample,  column) {
+
+  if (column == "num_matches") { # Scenario 1
+    return(lm(log(num_matches+1) ~ factor(treatment) + factor(gender) + factor(platform),data=d_sample))
+    # return(lm(log(num_matches+1) ~ factor(treatment),data=d_sample))
+  } else if (column == "rel_match_rate") { # Scenario 2
+    return(lm(log(rel_match_rate+0.001) ~ factor(treatment) + factor(gender) + factor(platform),data=d_sample))
+    # return(lm(log(rel_match_rate+0.001) ~ factor(treatment),data=d_sample))
+  } else if (column == "matched") { # Scenario 3
+    return(lm(matched ~ factor(treatment)  + factor(gender),data=d_sample))
+  }
+}
+
+experiment_lm_p_value_only <- function(d, s_size,  column) {
+  d_sample <- get_sample(d, s_size)
+  e_result <- experiment_lm(d_sample,column)
+  
+  # c_test <- coeftest(e_result)
+  # use robust errors
+  c_test <- coeftest(e_result,vcov.=vcovHC(e_result))
+  return(c(c_test['factor(treatment)liberal',4],c_test['factor(treatment)conservative',4]))
+}
+
+# Gets statistical power (percentage of tests that reject the null hypothesis)
+# Returns two (2) values: Liberal-Control power & Conservative-Control power
+get_power <- function(d,n_experiments, s_size=9, column, method='lm') {
+  p_values_lib <- c()
+  p_values_con <- c()
+
+  for (i in 1:n_experiments) {
+    treat_p_values <- experiment_lm_p_value_only(d,s_size,column)
+    p_values_lib[i] <- treat_p_values[1]
+    p_values_con[i] <- treat_p_values[2]
+  }
+  
+  rejects_lib <- p_values_lib[p_values_lib <= ALPHA]
+  pct_reject_lib = length(rejects_lib)/n_experiments*100
+  
+  rejects_con <- p_values_con[p_values_con <= ALPHA]
+  pct_reject_con = length(rejects_con)/n_experiments*100
+  
+  return(c(pct_reject_lib, pct_reject_con))
+}
+
+profile_sample_sizes <-  seq(18, 180, by = 18)
+swipe_sample_sizes <- seq(18, 180, by = 18)
+
+test_scenario <- function(d, n_experiments,sample_sizes,column='num_matches', method='lm') {
+  powers_lib = c()
+  powers_con = c()
+  count = 1
+  for (s in sample_sizes) {
+    powers = get_power(d, n_experiments = n_experiments, s_size = s, column = column, method = method)
+    powers_lib[count] = powers[1]
+    powers_con[count] = powers[2]
+    count = count + 1
+  }
+
+  return(list(powers_lib, powers_con))
+}
+
+```
+
+``` {r simulate_scenarios, warning = FALSE}
+scenario_1 = test_scenario(d,1000,profile_sample_sizes, column='num_matches',method='lm')
+scenario_2 = test_scenario(d,1000,profile_sample_sizes, column='rel_match_rate',method='lm')
+```
+
+```{r plot_results,include=TRUE, warning = FALSE}
+
+dt_1 <- data.table("s_size" = profile_sample_sizes, "s1_lib" = unlist(scenario_1[1]), "s1_con" = unlist(scenario_1[2]), "s2_lib" = unlist(scenario_2[1]), "s2_con" = unlist(scenario_2[2]))
+
+
+colors_1 <- c(
+  "Nominal Match Rate - Liberal" = "blue",
+  "Nominal Match Rate - Conservative" = "red",
+  "Relative Match Rate - Liberal" = "darkblue",
+  "Relative Match Rate - Conservative" = "darkred"
+  )
+
+
+ggplot(dt_1, aes(x=profile_sample_sizes)) + 
+  geom_line(aes(y = s1_lib, color = "Nominal Match Rate - Liberal"), linetype="solid") + 
+  geom_line(aes(y = s1_con, color= "Nominal Match Rate - Conservative"), linetype="solid") +
+  geom_line(aes(y = s2_lib, color = "Relative Match Rate - Liberal"), linetype="dashed") + 
+  geom_line(aes(y = s2_con, color= "Relative Match Rate - Conservative"), linetype="dashed") +
+  scale_colour_manual(values = colors_1) +
+  labs(x="Number of Profiles", y="Statistical Power (%)", color = "Legend", title = 'Power vs. Number of Profiles')
+
+```
+
+
+Based on the analysis, it seems that Scenario 2 (measuring post-treatment match rate relative to the number of pre-treatment matches) had significantly more statistical power compared to scenario one (measuring nominal number of matches after post-treatment). In both cases, it appears much easier to detect the conservative treatment effect, which is in alignment with the larger expected treatment effect.
+
+Because, in both scenario 1 and 2, the expected number of profiles required to achieve power stretches the limits of our resources, we decided for our third scenario to calculate power as a function of number of swipes (regardless of how many profiles the swipes were achieved with)
+
+To simulate the third scenario, a different data table was created where each row represents a single profile swiped on by the experimental profile where the features include gender and treatment (belonging to the swiping profile) while the outcome is a binary value (`matched`) of whether the profile that was invited reciprocated and created a match.
+
+```{r three_ml, warning = FALSE}
+#male liberal profile
+
+PCT_FEMALE_SWIPE_MATCH <- 0.19
+PCT_MALE_SWIPE_MATCH <-0.05
+
+dswipe <- data.table(id = 1:300000) # 10 is the number of swipes
+dswipe[, gender :=  c(rep("male", .N/2),rep("male", .N/2))]
+dswipe[, treatment := c(rep('anone', .N/2),rep('liberal', .N/2))]
+
+dswipe[treatment == 'anone' &        gender == 'male',   matched := rbinom(.N,1,PCT_MALE_SWIPE_MATCH)]
+dswipe[treatment == 'liberal' &     gender == 'male',   matched :=rbinom(.N,1,PCT_MALE_SWIPE_MATCH*ATTRACT_LIBERAL/ATTRACT_CONTROL)]
+
+
+# calculate p values
+percentages_to_sample = (300000) * seq(0.1,1, by = 0.1)*1
+
+for (i in 1:length(percentages_to_sample)){
+  if (ceiling(percentages_to_sample[i]) %% 2==1){
+    percentages_to_sample[i] = ceiling(percentages_to_sample[i])+1
+     }
+  else {percentages_to_sample[i] = ceiling(percentages_to_sample[i])}
+}
+
+#add values for plot
+extra_values = c(1000,2000,5000)
+percentages_to_sample <- c(extra_values, percentages_to_sample) 
+
+power_experiment <- NA
+
+for (k in 1:length(percentages_to_sample)){
+  
+  t_test_p_values <- NA
+  for(i in 1:1000) { 
+    
+    control_sample <- dswipe[treatment=='anone'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    treatment_sample <- dswipe[treatment=='liberal'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    d_new <- rbind(control_sample,treatment_sample)
+    t_test_ten_people <-d_new[ , t.test(matched ~ treatment)]
+    t_test_p_values[i] <-  t_test_ten_people$p.value
+
+    }
+    
+  power_experiment[k] = mean(t_test_p_values < 0.05)
+}
+
+
+power_male_liberal <-power_experiment # save value
+x_power_male_liberal <-percentages_to_sample
+
+```
+
+
+```{r three_fl, warning = FALSE}
+#female liberal profile
+
+
+dswipe <- data.table(id = 1:300000) # 10 is the number of swipes
+dswipe[, gender :=  c(rep("female", .N/2),rep("female", .N/2))]
+dswipe[, treatment := c(rep('anone', .N/2),rep('liberal', .N/2))]
+
+dswipe[treatment == 'anone' &        gender == 'female',   matched := rbinom(.N,1,PCT_FEMALE_SWIPE_MATCH)]
+dswipe[treatment == 'liberal' &     gender == 'female',   matched :=rbinom(.N,1,PCT_FEMALE_SWIPE_MATCH*ATTRACT_LIBERAL/ATTRACT_CONTROL)]
+
+
+# calculate p values
+percentages_to_sample = (300000) * seq(0.1,1, by = 0.1)*1
+
+for (i in 1:length(percentages_to_sample)){
+  if (ceiling(percentages_to_sample[i]) %% 2==1){
+    percentages_to_sample[i] = ceiling(percentages_to_sample[i])+1
+     }
+  else {percentages_to_sample[i] = ceiling(percentages_to_sample[i])}
+}
+
+#add values for plot
+extra_values = c(1000,2000,5000)
+percentages_to_sample <- c(extra_values, percentages_to_sample)
+
+power_experiment <- NA
+
+for (k in 1:length(percentages_to_sample)){
+  
+  t_test_p_values <- NA
+  for(i in 1:1000) { 
+    
+    control_sample <- dswipe[treatment=='anone'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    treatment_sample <- dswipe[treatment=='liberal'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    d_new <- rbind(control_sample,treatment_sample)
+    t_test_ten_people <-d_new[ , t.test(matched ~ treatment)]
+    t_test_p_values[i] <-  t_test_ten_people$p.value
+
+    }
+    
+  power_experiment[k] = mean(t_test_p_values < 0.05)
+}
+
+# p <-  ggplot() + aes(x = percentages_to_sample, y = power_experiment)+
+#   geom_line() +
+#   scale_x_continuous(breaks=seq(0, 300000, 50000))+ 
+#   theme_bw() +
+#   labs(title = "Figure 1. Power as function of number of swipes Female Liberal Profile", x = "swipes", y = "power of test")
+# p
+power_female_liberal <-power_experiment # save value
+x_power_female_liberal <-percentages_to_sample
+```
+
+
+
+```{r three_fc, warning = FALSE}
+
+#Female conservative profile 
+
+dswipe <- data.table(id = 1:300000) # 10 is the number of swipes
+dswipe[, gender :=  c(rep("female", .N/2),rep("female", .N/2))]
+dswipe[, treatment := c(rep('anone', .N/2),rep('liberal', .N/2))]
+
+dswipe[treatment == 'anone' &        gender == 'female',   matched := rbinom(.N,1,PCT_FEMALE_SWIPE_MATCH)]
+dswipe[treatment == 'liberal' &     gender == 'female',   matched :=rbinom(.N,1,PCT_FEMALE_SWIPE_MATCH*ATTRACT_CONSERVATIVE/ATTRACT_CONTROL)]
+
+
+# calculate p values
+percentages_to_sample = (6000) * seq(0.1,1, by = 0.1)*1
+
+for (i in 1:length(percentages_to_sample)){
+  if (ceiling(percentages_to_sample[i]) %% 2==1){
+    percentages_to_sample[i] = ceiling(percentages_to_sample[i])+1
+     }
+  else {percentages_to_sample[i] = ceiling(percentages_to_sample[i])}
+}
+
+#add values for plot
+extra_values = c(10000,100000,300000)
+percentages_to_sample <- c(percentages_to_sample,extra_values)
+power_experiment <- NA
+
+
+for (k in 1:length(percentages_to_sample)){
+  
+  t_test_p_values <- NA
+  for(i in 1:1000) { 
+    
+    control_sample <- dswipe[treatment=='anone'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    treatment_sample <- dswipe[treatment=='liberal'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    d_new <- rbind(control_sample,treatment_sample)
+    t_test_ten_people <-d_new[ , t.test(matched ~ treatment)]
+    t_test_p_values[i] <-  t_test_ten_people$p.value
+
+    }
+    
+  power_experiment[k] = mean(t_test_p_values < 0.05)
+}
+
+power_female_conservative <-power_experiment # save value
+x_power_female_conservative <-percentages_to_sample
+```
+
+
+```{r three_mc, warning = FALSE}
+
+#Male Conservative profile
+
+ATTRACT_CONTROL = 89
+ATTRACT_LIBERAL = 83
+ATTRACT_CONSERVATIVE = 72
+
+PCT_MALE_SWIPE_MATCH <-0.05
+
+dswipe <- data.table(id = 1:300000) # 10 is the number of swipes
+dswipe[, gender :=  c(rep("male", .N/2),rep("male", .N/2))]
+dswipe[, treatment := c(rep('anone', .N/2),rep('liberal', .N/2))]
+
+
+dswipe[treatment == 'anone' &        gender == 'male',   matched := rbinom(.N,1,PCT_MALE_SWIPE_MATCH)]
+dswipe[treatment == 'liberal' &     gender == 'male',   matched :=rbinom(.N,1,PCT_MALE_SWIPE_MATCH*ATTRACT_CONSERVATIVE/ATTRACT_CONTROL)]
+
+#calculate p values
+
+percentages_to_sample = (20000) * seq(0.1,1, by = 0.1)*1
+
+for (i in 1:length(percentages_to_sample)){
+  if (ceiling(percentages_to_sample[i]) %% 2==1){
+    percentages_to_sample[i] = ceiling(percentages_to_sample[i])+1
+     }
+  else {percentages_to_sample[i] = ceiling(percentages_to_sample[i])}
+}
+
+#add values for plot
+extra_values = c(50000,100000,300000)
+percentages_to_sample <- c(percentages_to_sample,extra_values)
+power_experiment <- NA
+
+power_experiment <- NA
+
+for (k in 1:length(percentages_to_sample)){
+  
+  t_test_p_values <- NA
+  for(i in 1:1000) { 
+    
+    control_sample <- dswipe[treatment=='anone'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    treatment_sample <- dswipe[treatment=='liberal'][sample(.N,percentages_to_sample[k]/2,replace = FALSE)]
+    d_new <- rbind(control_sample,treatment_sample)
+    t_test_ten_people <-d_new[ , t.test(matched ~ treatment)]
+    t_test_p_values[i] <-  t_test_ten_people$p.value
+
+    }
+    
+  power_experiment[k] = mean(t_test_p_values < 0.05)
+}
+
+power_male_conservative <-power_experiment # save value
+x_power_male_conservative <-percentages_to_sample
+```
+
+Scenario 3: We ran a power analyses separately using match rates for profiles for men and women in both the experimental and control groups, because the assumed match rate for men was much lower than that of women. Figure 2 shows the estimated power as function of the number of swipes for each profile. The results indicated that the liberal profiles for male and female required approximately 80,000 and 50,000 swipes to achieve 80 percent power respectively to detect an effect of disclosing political leanings in the profile. In contrast, the profiles for conservatives male and female only required 18,000 and 4,000 swipes respectively. These results are consistent with the current literature on experiments in online dating apps.
+
+```{r, include=TRUE}
+p <-  ggplot() + 
+  geom_line(aes(x = x_power_male_conservative, y = power_male_conservative, color = "Male Conservative")) +
+  geom_line(aes(x = x_power_female_conservative, y = power_female_conservative, color = "Female Conservative")) +
+  geom_line(aes(x = x_power_male_liberal, y = power_male_liberal, color = "Male Liberal" )) +
+  geom_line(aes(x = x_power_female_liberal, y = power_female_liberal, color = "Female Liberal")) +
+
+  scale_x_continuous(breaks=seq(0, 300000, 50000))+ 
+  scale_color_manual(name = "Type of Profile",
+                     values = c("Male Conservative" = "blue", "Female Conservative" = "red","Male Liberal" = "purple", "Female Liberal" = "darkgreen" )) +
+  theme_bw() +
+  labs(title = "Figure 2. Power as function of number of swipes for different profiles", x = "swipes", y = "power of test", color = "Legend")
+p
+
+```

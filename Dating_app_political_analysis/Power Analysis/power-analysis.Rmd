@@ -1,0 +1,58 @@
+
+```{r}
+
+# install.packages('lmtest')
+
+library(data.table)
+library(ggplot2)
+library(magrittr)
+library(lmtest)
+library(sandwich)
+
+
+d <- data.table(id = 1:40)
+
+# assign participants a gender and app platform
+d[, gender := sample(c('male', 'female'), size = .N, replace = TRUE)]
+d[, platform := sample(c('tinder', 'hinge', 'pof'), size = .N, replace = TRUE)]
+
+# simulates variation due to different profile pictures
+d[, quality_multiplier := pmax(rnorm(.N,2,0.5),0.01)]
+
+# studies show dating apps are ~75% male
+d[gender == 'male',     gender_multiplier := pmax(rnorm(.N,1,0.1),0.01)]
+d[gender == 'female',     gender_multiplier := pmax(rnorm(.N,3,0.3),0.01)]
+
+# https://www.businessofapps.com/data/dating-app-market/
+d[platform == 'tinder',     audience_multiplier := pmax(rnorm(.N,32,3.2),0.01)]
+d[platform == 'hinge',     audience_multiplier := pmax(rnorm(.N,15,1.5),0.01)]
+d[platform == 'pof',     audience_multiplier := pmax(rnorm(.N,14,1.4),0.01)]
+
+# simulates pool of number of matches before treatment
+d[,base_matches := round(quality_multiplier * gender_multiplier * audience_multiplier)]
+
+# different treatments to be assigned
+d[, treatment := sample(c('anone', 'liberal', 'conservative'), size = .N, replace = TRUE)]
+
+d[treatment == 'anone',     treatment_multiplier := 0]
+# propose liberal treatment causes 15% fewer matches on average
+d[treatment == 'liberal',     treatment_multiplier := pmax(rnorm(.N,-0.15,0.05),-0.99)]
+# propose conservative treatment causes 30% fewer matches on average
+d[treatment == 'conservative',     treatment_multiplier := pmax(rnorm(.N,-0.30,0.05),-0.99)]
+
+# simulate natural decay in number of matches relative to when account is first created
+d[, time_decay_multiplier := pmax(rnorm(.N,0.75,0.05),0.01)]
+
+# simulates pool of number of matches after treatment (or control)
+d[,num_matches := round(base_matches * time_decay_multiplier * (1 + treatment_multiplier))]
+# measure the number of matches after treatment relative to number of matches during the pre-treatment control
+d[,rel_match_rate := num_matches/base_matches]
+
+d[,mean(num_matches),by=treatment]
+
+mod <- lm(rel_match_rate ~ factor(treatment) + factor(platform) + factor(gender),data=d)
+
+coeftest(mod)
+
+
+```

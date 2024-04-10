@@ -1,0 +1,276 @@
+
+```{r create_table}
+
+# install.packages('lmtest')
+library(data.table)
+library(ggplot2)
+library(magrittr)
+library(lmtest)
+library(sandwich)
+
+
+# Significance threshold
+ALPHA = 0.05
+
+
+
+# Profile_Viewer_Attract
+# Figures based on "The Democracy of Dating"
+ATTRACT_CONTROL = 89
+ATTRACT_LIBERAL = 83
+ATTRACT_CONSERVATIVE = 72
+
+# Returns percent difference (as a decimal) compared to the old
+get_pct_diff <- function(old, new) {
+  return((new-old)/old)
+}
+
+# Treatment multipliers based on percentage less likely to swipe
+TRT_LIB = get_pct_diff(ATTRACT_CONTROL, ATTRACT_LIBERAL)
+TRT_CON = get_pct_diff(ATTRACT_CONTROL, ATTRACT_CONSERVATIVE)
+# Base treatment modifier
+TRT_LIB_SD_PCT = 0.01
+TRT_CON_SD_PCT = 0.01
+
+# Use 30k rows as the population
+d <- data.table(id = 1:30000)
+
+# assign participants a gender and app platform
+d[, gender := sample(c('male', 'female'), size = .N, replace = TRUE)]
+d[, platform := sample(c('tinder', 'hinge', 'pof'), size = .N, replace = TRUE)]
+
+# simulates variation due to different profile pictures
+d[, quality_multiplier := pmax(rnorm(.N,1.5,0.25),0.01)]
+
+GENDER_MALE_FEMALE_RATIO <- 3
+GENDER_MALE_SD_PCT <- 0 # 0.1
+GENDER_FEMALE_SD_PCT <- 0 # 0.1
+
+# https://www.businessofapps.com/data/dating-app-market/
+PLATFORM_TINDER_MARKETSHARE <- 32
+PLATFORM_HINGE_MARKETSHARE <- 15
+PLATFORM_POF_MARKETSHARE <- 14
+
+PLATFORM_TINDER_SD_PCT <- 0 # 0.1
+PLATFORM_HINGE_SD_PCT <- 0 # 0.1
+PLATFORM_POF_SD_PCT <- 0 # 0.1
+
+# studies show dating apps are ~75% male
+d[gender == 'male',     gender_multiplier := pmax(rnorm(.N,1,1*GENDER_MALE_SD_PCT),0.01)]
+d[gender == 'female',     gender_multiplier := pmax(rnorm(.N,GENDER_MALE_FEMALE_RATIO,GENDER_MALE_FEMALE_RATIO*GENDER_FEMALE_SD_PCT),0.01)]
+
+d[platform == 'tinder',     audience_multiplier := pmax(rnorm(.N,PLATFORM_TINDER_MARKETSHARE,PLATFORM_TINDER_MARKETSHARE*PLATFORM_TINDER_SD_PCT),0.01)]
+d[platform == 'hinge',     audience_multiplier := pmax(rnorm(.N,PLATFORM_HINGE_MARKETSHARE,PLATFORM_HINGE_MARKETSHARE*PLATFORM_HINGE_SD_PCT),0.01)]
+d[platform == 'pof',     audience_multiplier := pmax(rnorm(.N,PLATFORM_POF_MARKETSHARE,PLATFORM_POF_MARKETSHARE*PLATFORM_POF_SD_PCT),0.01)]
+
+# simulates pool of number of matches before treatment
+d[,base_matches := round(quality_multiplier * gender_multiplier * audience_multiplier)]
+
+# different treatments to be assigned
+d[, treatment := sample(c('anone', 'liberal', 'conservative'), size = .N, replace = TRUE)]
+
+# Treatment-induced decay figures based on "The Democracy of Dating"
+d[treatment == 'anone',     treatment_multiplier := 0]
+# propose liberal treatment causes 15% fewer matches on average
+d[treatment == 'liberal',     treatment_multiplier := pmax(rnorm(.N,TRT_LIB,abs(TRT_LIB)*TRT_LIB_SD_PCT),-0.99)]
+# propose conservative treatment causes 30% fewer matches on average
+d[treatment == 'conservative',     treatment_multiplier := pmax(rnorm(.N,TRT_CON,abs(TRT_CON)*TRT_CON_SD_PCT),-0.99)]
+
+# simulate natural decay in number of matches relative to when account is first created
+d[, time_decay_multiplier := pmax(rnorm(.N,0.75,0.05),0.01)]
+
+# simulates pool of number of matches after treatment (or control)
+d[,num_matches := round(base_matches * time_decay_multiplier * (1 + treatment_multiplier))]
+# measure the number of matches after treatment relative to number of matches during the pre-treatment control
+d[,rel_match_rate := num_matches/base_matches]
+
+#d[,mean(num_matches),by=treatment]
+```
+
+
+``` {r random_inference_functions}
+library(dplyr)
+
+# Samples from the population table and secures equal number of
+# profiles for control and both treatments (must be in multiples of 3)
+get_sample <- function(d, s_size = 18) {
+  return(d[, .SD[sample(x = .N, size = s_size/3,replace=TRUE)], by = treatment])
+  # return(d[, .SD[sample(x = .N, size = s_size/18,replace=TRUE)], by = .(treatment,gender,platform)])
+}
+
+# Returns the T-Test object of the difference between means
+# Compares Liberal-Control or Conservative-Control
+experiment_t_test <- function(d_sample,  column, is_liberal=TRUE) {
+  
+  # Separate into control and treatment
+  v_treatment <- NA
+  v_control <- NA
+  
+  # Selects Liberla or Conservative comparison
+  
+  # if ( TRUE == is_liberal ) {
+  #   d_sample = d_sample[treatment != 'conservative',]
+  # } else {
+  #   d_sample = d_sample[treatment != 'liberal',]
+  # }
+  # 
+  # if (column == "num_matches") {
+  #   return(t.test(num_matches ~ treatment,data=d_sample))
+  # } else {
+  #   return(t.test(rel_match_rate ~ treatment,data=d_sample))
+  # }
+  
+  treat = NA
+  if (TRUE == is_liberal) {
+    treat = 'liberal'
+  } else {
+    treat = 'conservative'
+  }
+
+  if (column == "num_matches") { # Scenario 1
+    v_treatment <- d_sample[treatment == treat, "num_matches"]
+    v_control <- d_sample[treatment == 'anone', "num_matches"]
+  } else if (column == "rel_match_rate") { # Scenario 2
+    v_treatment <- d_sample[treatment == treat, "rel_match_rate"]
+    v_control <- d_sample[treatment == 'anone', "rel_match_rate"]
+  } else { # Scenario 3
+    # Add column name here
+    v_treatment <- d_sample[treatment == treat, "rel_match_rate"]
+    v_control <- d_sample[treatment == 'anone', "rel_match_rate"]
+  }
+
+  # Run T-test
+  t_test_obj = t.test(v_control, v_treatment, conf.level = 0.95, alternative = "two.sided")
+
+  return(t_test_obj)
+}
+
+# Returns only the p-value from the experiment() function
+experiment_t_test_p_value_only <- function(d_sample, column, is_liberal=TRUE) {
+  return(experiment_t_test(d_sample, column, is_liberal)$"p.value")
+}
+
+experiment_multi_treatment_t_test <- function(d, s_size, column) {
+  # Get sample
+  d_sample <- get_sample(d, s_size)
+  l_treat <- experiment_t_test(d_sample, column=column, is_liberal = TRUE)
+  c_treat <- experiment_t_test(d_sample, column=column, is_liberal = FALSE)
+  return(c(l_treat, c_treat))
+}
+
+experiment_multi_treatment_t_test_p_value_only <- function(d, s_size, column) {
+  # Get sample
+  d_sample <- get_sample(d, s_size)
+
+  l_treat <- experiment_t_test_p_value_only(d_sample, column=column, is_liberal = TRUE)
+  c_treat <- experiment_t_test_p_value_only(d_sample, column=column, is_liberal = FALSE)
+  return(c(l_treat, c_treat))
+}
+
+experiment_lm <- function(d_sample,  column) {
+
+  if (column == "num_matches") { # Scenario 1
+    return(lm(log(num_matches+1) ~ factor(treatment) + factor(gender) + factor(platform),data=d_sample))
+    # return(lm(log(num_matches+1) ~ factor(treatment),data=d_sample))
+  } else if (column == "rel_match_rate") { # Scenario 2
+    return(lm(log(rel_match_rate+0.001) ~ factor(treatment) + factor(gender) + factor(platform),data=d_sample))
+    # return(lm(log(rel_match_rate+0.001) ~ factor(treatment),data=d_sample))
+  } else { # Scenario 3
+    return(NA)
+  }
+}
+
+experiment_lm_p_value_only <- function(d, s_size,  column) {
+  d_sample <- get_sample(d, s_size)
+  e_result <- experiment_lm(d_sample,'num_matches')
+  
+  # c_test <- coeftest(e_result)
+  # use robust errors
+  c_test <- coeftest(e_result,vcov.=vcovHC(e_result))
+  return(c(c_test['factor(treatment)liberal',4],c_test['factor(treatment)conservative',4]))
+}
+
+# Gets statistical power (percentage of tests that reject the null hypothesis)
+# Returns two (2) values: Liberal-Control power & Conservative-Control power
+get_power <- function(d, s_size=9, column, method='lm') {
+  n_experiments = 1000
+  t_test_p_values_lib <- c()
+  t_test_p_values_con <- c()
+
+  for (i in 1:n_experiments) {
+    if (method == 't.test') {
+      treat_p_values <- experiment_multi_treatment_t_test_p_value_only(d,s_size,column)
+      t_test_p_values_lib[i] <- treat_p_values[1]
+      t_test_p_values_con[i] <- treat_p_values[2]
+    } else {
+      treat_p_values <- experiment_lm_p_value_only(d,s_size,column)
+      t_test_p_values_lib[i] <- treat_p_values[1]
+      t_test_p_values_con[i] <- treat_p_values[2]
+    }
+  }
+  
+  t_test_rejects_lib <- t_test_p_values_lib[t_test_p_values_lib <= ALPHA]
+  pct_reject_lib = length(t_test_rejects_lib)/n_experiments*100
+  
+  t_test_rejects_con <- t_test_p_values_con[t_test_p_values_con <= ALPHA]
+  pct_reject_con = length(t_test_rejects_con)/n_experiments*100
+  
+  return(c(pct_reject_lib, pct_reject_con))
+}
+
+# Scenario 1: Use raw match rate
+#mod_1 <- lm(num_matches ~ factor(treatment) + factor(platform) + factor(gender),data=d)
+
+# Scenario 2: Use match decay
+#mod_2 <- lm(rel_match_rate ~ factor(treatment) + factor(platform) + factor(gender),data=d)
+
+# Scenario 3: Use
+
+
+#coeftest(mod_1)
+
+sample_sizes <- seq(18, 180, by = 18)
+
+test_scenario <- function(d, column='num_matches', method='lm') {
+  powers_lib = c()
+  powers_con = c()
+  count = 1
+  for (s in sample_sizes) {
+    powers = get_power(d, s_size = s, column = column, method = method)
+    powers_lib[count] = powers[1]
+    powers_con[count] = powers[2]
+    count = count + 1
+  }
+
+  return(list(powers_lib, powers_con))
+}
+
+scenario_1 = test_scenario(d, column='num_matches',method='lm')
+scenario_2 = test_scenario(d, column='rel_match_rate',method='lm')
+
+```
+
+```{r create_table}
+
+dt_1 <- data.table("s_size" = sample_sizes, "s1_lib" = unlist(scenario_1[1]), "s1_con" = unlist(scenario_1[2]), "s2_lib" = unlist(scenario_2[1]), "s2_con" = unlist(scenario_2[2]))
+
+
+colors <- c(
+  "Nominal Match Rate - Liberal" = "blue",
+  "Nominal Match Rate - Conservative" = "red",
+  "Relative Match Rate - Liberal" = "darkblue",
+  "Relative Match Rate - Conservative" = "darkred",
+  "S3 Liberal" = "lightblue",
+  "S3 Conservative" = "pink"
+  )
+
+ggplot(dt_1, aes(x=sample_sizes)) + 
+  geom_line(aes(y = s1_lib, color = "Nominal Match Rate - Liberal"), linetype="dashed") + 
+  geom_line(aes(y = s1_con, color= "Nominal Match Rate - Conservative"), linetype="dashed") +
+  geom_line(aes(y = s2_lib, color = "Relative Match Rate - Liberal"), linetype="twodash") + 
+  geom_line(aes(y = s2_con, color= "Relative Match Rate - Conservative"), linetype="twodash") +
+  scale_colour_manual(values = colors) +
+  labs(x="sample_sizes", y="(%)", color = "Legend")
+
+```
+

@@ -1,0 +1,69 @@
+```{r}
+d <- data.table(
+  'gender' = c(
+    'female',
+    'female',
+    'female',
+    'female',
+    'male',
+    'male',
+    'male',
+    'male',
+    'male',
+    'male',
+    'male',
+    'male'
+    ), 
+  'platform' = c(
+    'hinge',
+    'hinge',
+    'hinge',
+    'tinder',
+    'hinge',
+    'tinder',
+    'hinge',
+    'tinder',
+    'hinge',
+    'tinder',
+    'hinge',
+    'tinder'
+  ), 
+  'match_rate' = c(
+    0.213,
+    0.35,
+    0.2,
+    0.468,
+    0.113,
+    0.033,
+    0.05,
+    0.017,
+    0.077,
+    0.003,
+    0.023,
+    0.013
+  )
+)
+
+d[platform=='tinder',platform_int:=1]
+d[platform=='hinge',platform_int:=2]
+d
+
+library(ggplot2)
+
+
+ggplot(d, aes(x = platform_int, y = match_rate)) +
+  geom_point(aes(colour = gender)) + # Points and color by group
+  xlim(0,3) +
+  scale_color_discrete("Groups") +  # Change legend title
+  xlab("Platform (Tinder=1,Hinge=2)") +              # X-axis label
+  ylab("Match Rate")  +   # Y-axis label
+  ggtitle('Baseline Match Rates by Gender by Platform') +
+  theme(axis.line = element_line(colour = "black", # Changes the default theme
+                                 size = 0.24),
+        panel.grid.minor = element_line(color = "red",
+                                        size = 0,
+                                        linetype = 2))
+
+m <- lm(match_rate ~ factor(gender) + factor(platform) +factor(gender)*factor(platform),data=d)
+coeftest(m)
+```

@@ -1,0 +1,347 @@
+---
+title: "Dating App Analysis"
+author: ""
+date: "12/03/2022"
+output: pdf_document
+classoption: 
+  - landscape
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(stargazer)
+```
+
+
+```{r}
+
+library(dplyr)
+library(data.table)
+library(sandwich)
+library(lmtest)
+library(ggplot2) 
+library(patchwork)
+library(stargazer)
+library(tidyr)
+
+d_raw <- fread('../Data/swipe-data.csv') %>%
+  rename(
+    match_rate = Match_Rate,
+    profile = Profile,
+    gender = Gender,
+    platform = Platform,
+    week = Exp_Week,
+    treatment = Treatment,
+    day_0_swipe_count = Day_0_Swipes,
+    day_3_swipe_count = Day_3_Swipes,
+    day_5_swipe_count = Day_5_Swipes,
+    match_count = Match_Count,
+    
+  ) %>%
+  mutate(
+    swipe_count = day_0_swipe_count + day_3_swipe_count + day_5_swipe_count,
+    match_rate = match_count / swipe_count
+  ) %>%
+  select(
+    profile,
+    gender,
+    platform,week,
+    treatment,
+    swipe_count,
+    match_count,
+    match_rate
+  )
+```
+
+```{r}
+pretreatment_values <- d_raw[week == 0,.(
+    profile,
+    platform,
+    gender,
+    match_count,
+    match_rate
+  )] %>%
+  rename(
+    base_match_count = match_count,
+    base_match_rate = match_rate
+  )
+
+# calculate profile desirability (how well a profile performed against like profiles in the pretreatment period)
+pretreatment_values[,avg_group_match_rate:=mean(base_match_rate,na.rm=TRUE),by=.(gender,platform)]
+pretreatment_values[,profile_desirability:=(base_match_rate - avg_group_match_rate)/avg_group_match_rate]
+```
+
+```{r}
+#add pretreatment data to actual experiment data values (filter profiles that did not complete treatment due to bans)
+d_week_all <- pretreatment_values[!is.na(base_match_count) & !is.na(base_match_rate),] %>% merge(d_raw[week > 0,])
+
+# remove rows that could not be completed due to bans
+d_week <- d_week_all[!is.na(match_count) & !is.na(match_rate),]
+
+```
+
+```{r}
+
+# pivot counts by profile by week into one row per swipe
+d_swipe <- d_week[data.table(swipe_idx=1:d_week[,max(swipe_count)]),on=.(swipe_count>=swipe_idx),.(profile,platform,gender,profile_desirability,week,treatment,match_count,swipe_idx)]
+d_swipe[,matched:=as.integer(swipe_idx<=match_count)]
+d_swipe[,cluster_id:=paste(profile,platform,week,sep='-')]
+
+octant_weights <- d_week[,1200/sum(swipe_count),by=.(treatment,gender,platform)] %>% rename(octant_weight=V1)
+d_swipe <- d_swipe %>% merge(octant_weights)
+
+# set omitted variables
+d_swipe <- within(d_swipe, treatment <- relevel(as.factor(treatment), ref = "CONTROL"))
+d_swipe <- within(d_swipe, gender <- relevel(as.factor(gender), ref = "MALE"))
+d_swipe <- within(d_swipe, platform <- relevel(as.factor(platform), ref = "HINGE"))
+
+d_swipe[,sum(.N),by=.(gender,platform,treatment)]
+
+```
+
+
+
+```{r}
+naive_model <- lm(
+  matched ~ factor(treatment)
+            ,data=d_swipe
+          )
+naive_model_coeftest <- coeftest(naive_model,vcov=vcovCL,cluster=~cluster_id)
+```
+
+```{r}
+segmented_model <- lm(
+  matched ~ factor(gender) + factor(platform) + factor(treatment)
+            ,data=d_swipe
+            )
+segmented_model_coeftest <- coeftest(segmented_model,vcov=vcovCL,cluster=~cluster_id)
+segmented_model_coeftest
+```
+
+```{r}
+interacted_segmented_model <- lm(
+  matched ~ factor(gender)*factor(platform)*factor(treatment)
+            ,data=d_swipe
+            )
+interacted_segmented_model_coeftest <- coeftest(interacted_segmented_model,vcov=vcovCL,cluster=~cluster_id)
+```
+
+```{r}
+controlled_segmented_model <- lm(
+  matched ~ factor(gender) + factor(platform) + factor(treatment) + week + profile_desirability
+            ,data=d_swipe
+            )
+controlled_segmented_model_coeftest <- coeftest(controlled_segmented_model,vcov=vcovCL,cluster=~cluster_id)
+```
+
+```{r}
+interacted_controlled_segmented_model <- lm(
+  matched ~ factor(gender)*factor(platform)*factor(treatment) +
+            week*factor(platform)*factor(gender) + profile_desirability
+            ,data=d_swipe
+          )
+
+interacted_controlled_segmented_model_coeftest <- coeftest(interacted_controlled_segmented_model,vcov=vcovCL,cluster=~cluster_id)
+
+interacted_controlled_segmented_model_coeftest
+```
+
+```{r, results='asis'}
+m1 <- naive_model
+m2 <- segmented_model
+m3 <- interacted_segmented_model
+m4 <- controlled_segmented_model
+m5 <- interacted_controlled_segmented_model
+
+sg_coef_order <- c(
+    "factor\\(treatment\\)CONSERVATIVE",
+    "factor\\(treatment\\)LIBERAL",
+    "factor\\(gender\\)FEMALE:factor\\(treatment\\)LIBERAL",
+    "factor\\(gender\\)FEMALE:factor\\(treatment\\)CONSERVATIVE",
+    "factor\\(platform\\)TINDER:factor\\(treatment\\)LIBERAL",
+    "factor\\(platform\\)TINDER:factor\\(treatment\\)CONSERVATIVE",
+    "factor\\(gender\\)FEMALE:factor\\(platform\\)TINDER:factor\\(treatment\\)LIBERAL",
+    "factor\\(gender\\)FEMALE:factor\\(platform\\)TINDER:factor\\(treatment\\)CONSERVATIVE",
+    "factor\\(gender\\)FEMALE",
+    "factor\\(platform\\)TINDER",
+    "factor\\(gender\\)FEMALE:factor\\(platform\\)TINDER",
+    "profile_desirability",
+    "week",
+    "factor\\(platform\\)TINDER:week",
+    "factor\\(gender\\)FEMALE:week",
+    "factor\\(gender\\)FEMALE:factor\\(platform\\)TINDER:week",
+    "Constant"
+  )
+
+stargazer(
+  m1,
+  m2,
+  m3,
+  m4,
+  m5,
+  se = list(
+    naive_model_coeftest[,"Std. Error"],
+    segmented_model_coeftest[,"Std. Error"],
+    interacted_segmented_model_coeftest[,"Std. Error"],
+    controlled_segmented_model_coeftest[,"Std. Error"],
+    interacted_controlled_segmented_model_coeftest[,"Std. Error"]
+  )
+  ,type = "text"
+  ,order=paste0("^",sg_coef_order , "$"),
+  header=FALSE,
+  #column.sep.width = "-10pt",
+  single.row = TRUE,
+  #no.space = TRUE,
+  font.size="scriptsize",
+  column.labels = c("Naive", "Segmented","w/controls"
+                    #,"weighted"
+                    )
+)
+
+anova(m4,m5)
+
+```
+
+```{r}
+
+
+controlled_segmented_model_coeftest
+
+calc_stderr_from_pvalue_estimate <- function(p_val,est) {est/abs(qt(p_val/2,df=nrow(d_swipe))) }
+# holm
+# ttt <- as.data.table(controlled_segmented_model_coeftest[,])
+# ttt[,test_std:=calc_stderr_from_pvalue_estimate(`Pr(>|t|)`,`Estimate`)]
+
+coeftest_as_data_table <- function(ct) {
+  ctdf <- cbind(
+    data.table(coef=rownames(ct)),
+    as.data.table(ct[,])
+  )
+  ctdf[,ci_min:=`Estimate` - 1.96*`Std. Error`]
+  ctdf[,ci_max:=`Estimate` + 1.96*`Std. Error`]
+  return(ctdf)
+}
+
+apply_bonf_to_coeftest <- function(ct,bonf_number) {
+  ctdf <- coeftest_as_data_table(ct)
+  # adjust p-values
+  ctdf[,`Pr(>|t|)`:=p.adjust(`Pr(>|t|)`,method="bonferroni",n=20)]
+  # update standard errors
+  ctdf[,`Std. Error`:=calc_stderr_from_pvalue_estimate(`Estimate`,`Pr(>|t|)`)]
+  # update t value
+  ctdf[,`t value`:=`Estimate`/`Std. Error`]
+  # update ci intervals
+  ctdf[,ci_min:=`Estimate` - 1.96*`Std. Error`]
+  ctdf[,ci_max:=`Estimate` + 1.96*`Std. Error`]
+  return(ctdf)
+}
+
+
+tt5 <- coeftest_as_data_table(interacted_controlled_segmented_model_coeftest)
+tt5
+tt6 <- apply_bonf_to_coeftest(interacted_controlled_segmented_model_coeftest,8)
+tt5
+```
+```{r}
+tt6
+```
+
+
+
+
+```{r fig.width=5,fig.height=4}
+releveled_ci <- function(gender_str,platform_str,m_orig,d_i) {
+  d <- d_i[,]
+  d <- within(d, treatment <- relevel(as.factor(treatment), ref = "CONTROL"))
+  d <- within(d, gender <- relevel(as.factor(gender), ref = gender_str))
+  d <- within(d, platform <- relevel(as.factor(platform), ref = platform_str))
+  formula_str <- eval(m_orig$call[[2]])
+  print(formula_str)
+  m <- lm( formula_str
+     #matched ~ factor(gender)*factor(platform)*factor(treatment) +
+    #        week*factor(gender)*factor(platform) + profile_desirability
+            ,data=d
+            #,weights=octant_weight
+            )
+  # return(m)
+  ci <- coefci(m,vcov=vcovCL,cluster=~cluster_id
+               #,weights=octant_weight
+               )
+  tb <- data.table(
+    gender=c(gender_str,gender_str),
+    platform=c(platform_str,platform_str),
+    segment=c(paste(gender_str,platform_str,sep=":"),paste(gender_str,platform_str,sep=":")),
+    treatment=c("LIBERAL","CONSERVATIVE"),
+    ci_min=c(ci["factor(treatment)LIBERAL",1],ci["factor(treatment)CONSERVATIVE",1]),
+    ci_max=c(ci["factor(treatment)LIBERAL",2],ci["factor(treatment)CONSERVATIVE",2])
+  )
+  return(tb)
+}
+mm2 <- releveled_ci("FEMALE","TINDER",m5,d_swipe)
+coeftest(mm2,vcov=vcovCL,cluster=~cluster_id)
+
+gc <- rbind(
+ releveled_ci("MALE","HINGE",m5,d_swipe),
+ releveled_ci("FEMALE","HINGE",m5,d_swipe),
+ releveled_ci("MALE","TINDER",m5,d_swipe),
+ releveled_ci("FEMALE","TINDER",m5,d_swipe)
+  
+)
+
+gc
+
+nss <- gc[ci_min/abs(ci_min) != ci_max/abs(ci_max),]
+
+ss <- gc[ci_min/abs(ci_min) == ci_max/abs(ci_max),]
+
+brs <- rbind(
+  nss %>% mutate(ci=ci_min,cat='bar'),
+  nss %>% mutate(ci=ci_max,cat='bar'),
+  ss %>% mutate(ci=(ci_max-ci_min)*(abs(ci_max)/ci_max),cat='bar'),
+  ss %>% mutate(ci=pmin(abs(ci_min),abs(ci_max))*(abs(ci_max)/ci_max),cat='spacer')
+)
+
+ggplot(brs[treatment=="LIBERAL"], aes(x = segment, y = ci, fill = cat)) +
+  geom_col() +
+  geom_hline(yintercept = 0) +
+  coord_flip() +
+  ylim(-0.25,0.25) +
+  scale_x_discrete(limits = c("FEMALE:TINDER","FEMALE:HINGE","MALE:TINDER","MALE:HINGE")) +
+  ggtitle("           Liberal Treatment Effect") +
+  labs(y = "Delta Match Rate", x="Segment") +
+  scale_fill_manual(values=c("#4488FF",
+                             alpha("#FFFFFF",0.0)))
+  #scale_y_discrete(limits = c(-0.25,0.25))
+
+ggplot(brs[treatment=="CONSERVATIVE"], aes(x = segment, y = ci, fill = cat)) +
+  geom_col() +
+  geom_hline(yintercept = 0) +
+  coord_flip() +
+  ylim(-0.25,0.25) +
+  scale_x_discrete(limits = c("FEMALE:TINDER","FEMALE:HINGE","MALE:TINDER","MALE:HINGE")) +
+  ggtitle("     Conservative Treatment Effect") +
+  labs(y = "Delta Match Rate", x="Segment") +
+  scale_fill_manual(values=c("#DD4444",
+                             alpha("#FFFFFF",0.0)))
+
+```
+```{r}
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
