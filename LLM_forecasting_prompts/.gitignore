@@ -2,6 +2,7 @@
 data/*
 !data/README.md
 !data/data.zip
+!data/test_df_latest.json
 
 # Other
 .DS_Store
