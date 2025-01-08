@@ -76,4 +76,4 @@ The [notebooks](notebooks) folder contains the code used to generate the results
 
 ## Demo
 
-The [demo](demo) folder contains a demo of the pipeline. The demo is a simple web application that allows non-real-time exploration of our dataset. Due to resource and model hosting considerations, this demo does not do real-time inference of the actual questions. It does however show how the pipeline works in terms of prompt enrichment. See demo [here](https://llm-forecasting-prompts-123.streamlit.app/).
+See hosted online demo [here](https://llm-forecasting-prompts-123.streamlit.app/). The [demo](demo) folder contains a demo of the pipeline. The demo is a simple web application that allows non-real-time exploration of our dataset. Due to resource and model hosting considerations, this demo does not do real-time inference of the actual questions. It does however show how the pipeline works in terms of prompt enrichment.
