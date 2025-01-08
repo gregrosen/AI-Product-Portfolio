@@ -1,0 +1,13 @@
+# Core dependencies
+pandas
+numpy
+scikit-learn
+matplotlib
+streamlit  # Streamlit version can be adjusted based on compatibility
+
+# Pip-only dependencies
+tensorflow==2.17.0
+tensorboard
+scikeras
+scikit-optimize
+tensorflow-metal==1.1.0
