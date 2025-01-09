@@ -38,21 +38,9 @@ These results demonstrate that the XGBoost model is both accurate and robust, ma
 
 ---
 
-## 🛠️ Installation and Usage
+## 🛠️ Usage
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/gregrosen/Data-Science-Projects.git
-   ```
-2. Navigate to the project directory:
-   ```bash
-   cd "California Housing Prices (Regression)"
-   ```
-
-3. Open the Jupyter Notebook to explore the analysis and run the code:
-   ```bash
-   jupyter notebook "California Housing Prices (Regression).ipynb"
-   ```
+Open the Jupyter Notebook to explore the analysis: **[California Housing Prices (Regression).ipynb](https://nbviewer.jupyter.org/github/gregrosen/Data-Science-Projects/blob/master/California%20Housing%20Prices%20(Regression)/California%20Housing%20Prices%20(Regression).ipynb)**
 
 ---
 

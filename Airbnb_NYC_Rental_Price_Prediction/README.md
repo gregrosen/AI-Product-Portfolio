@@ -5,7 +5,7 @@ This project focuses on analyzing and predicting the rental prices of Airbnb lis
 ---
 
 ## 🗂️ Project Structure
-- **Airbnb_NYC_2019_Final.html**: Interactive HTML version of the notebook. **Best way to view** using GitHub's [Airbnb NYC 2019 Interactive HTML](https://htmlpreview.github.io/?https://github.com/gregrosen/Data-Science-Projects/blob/master/Airbnb_NYC_Rental_Price_Prediction/Airbnb_NYC_2019_Final.html). *(Recommended)*
+- **Airbnb_NYC_2019_Final.html**: Interactive HTML version of the notebook. **Best way to view** is using GitHub's [Airbnb NYC 2019 Interactive HTML](https://htmlpreview.github.io/?https://github.com/gregrosen/Data-Science-Projects/blob/master/Airbnb_NYC_Rental_Price_Prediction/Airbnb_NYC_2019_Final.html). *(Recommended)*
 - **Airbnb_NYC_2019_Final.ipynb**: Full Jupyter Notebook file for code and analysis. *(Not recommended for direct viewing on GitHub due to file size)*
 - **Archive/**: Folder containing archived or intermediate files.
 - **img/**: Folder with relevant images for the project.
@@ -38,14 +38,8 @@ GitHub struggles to render large notebooks effectively. Here are two recommended
 ---
 
 ## 📁 Installation and Usage
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
-2.	Navigate to the project directory:
 
-    ```bash
-    cd YOUR-REPO
-3.	Open the HTML file in your browser or load the notebook in Jupyter.
+Open the HTML file in your browser or load the notebook in Jupyter.
 
 ---
 
