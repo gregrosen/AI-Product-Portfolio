@@ -5,7 +5,7 @@
 This is a portfolio of projects I've worked on across my UC Berkeley Data Science master's program and my own personal projects and tutorials. The portfolio consists of the following:
 
 ## 1.	SuperUseful_Mobile_App
-  - Mobile app I built end-to-end that combines endless scroll with e-commerce shopping. Check out the demo at [SuperUsefulApp.com](https://superusefulapp.com)! (Please note this is a mobile-focused app, not optimized for desktop)
+  - Mobile app I built end-to-end that combines endless scroll with e-commerce shopping. Check out the demo at [SuperUsefulApp.com](https://superusefulapp.com)! (Please note this is a mobile-focused app, not optimized for desktop. Check it out on your smartphone!)
 ## 2.	LLM_forecasting_prompts
   - Testing whether LLMs can improve their forecasting ability of the future by adding supplemental context from the web.
 ## 3.	Dating_app_political_analysis
